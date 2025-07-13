@@ -1,0 +1,28 @@
+{
+  "name": "chrome-ext",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "chokidar \"*.js\" -c \"npm run build;npm run reload\"\n\n",
+    "reload": "open http://reload.extensions/",
+    "build": "esbuild panel.js --outfile=dist/panel-bundle.js --bundle --format=esm",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "chokidar-cli": "^3.0.0",
+    "esbuild": "^0.25.6",
+    "picomatch": "^4.0.2"
+  },
+  "dependencies": {
+    "@thepassle/app-tools": "^0.10.0",
+    "@thepassle/module-utils": "^0.3.3",
+    "codemirror-elements": "^0.0.10",
+    "es-module-lexer": "^1.7.0",
+    "lit": "^3.3.0"
+  }
+}
