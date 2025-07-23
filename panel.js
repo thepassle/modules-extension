@@ -1,32 +1,98 @@
-import { imports } from "@thepassle/module-utils/imports.js";
-import { exports } from "@thepassle/module-utils/exports.js";
-import { barrelFile } from "@thepassle/module-utils/barrel-file.js";
 import { LitElement, html, css } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { State } from "@thepassle/app-tools/state.js";
+import { getFileName } from "./src/utils.js";
 import "codemirror-elements";
 import "codemirror-elements/lib/cm-lang-javascript.js";
 import { debounceAtTimeout } from "@thepassle/app-tools/utils/async.js";
-
-const files = new State({});
-
-function getFileSizeClass(sizeKB) {
-  const size = parseFloat(sizeKB);
-
-  if (size < 10) {
-    return "file-size small";
-  } else if (size <= 40) {
-    return "file-size medium";
-  } else {
-    return "file-size large";
-  }
-}
+import { when } from "@thepassle/app-tools/utils.js";
+import { files } from "./src/singletons.js";
+import { getFileSizeClass } from "./src/utils.js";
+import {
+  findInitiatorPath,
+  buildTreeData,
+  buildModuleGraphs,
+} from "./src/module-graph.js";
+import "./src/chrome-devtools-side-effect-stuff/index.js";
 
 class ModuleGraph extends LitElement {
   static styles = [
     css`
+      .initiator-section {
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+
+      .initiator-container {
+        max-height: 50vh;
+        overflow: auto;
+        padding: 10px;
+        background: #f9f9f9;
+        border-top: 1px solid #e0e0e0;
+      }
+
+      .initiator-path {
+        margin-bottom: 8px;
+      }
+
+      .initiator-path-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: #666;
+        margin-bottom: 4px;
+      }
+
+      .initiator-item {
+        font-size: 12px;
+        line-height: 1.4;
+        margin-bottom: 2px;
+        display: flex;
+        align-items: center;
+      }
+
+      .initiator-indent {
+        color: #6c757d;
+        user-select: none;
+        font-family: monospace;
+      }
+
+      .initiator-link {
+        background: none;
+        border: none;
+        color: #0066cc;
+        text-decoration: underline;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: inherit;
+        padding: 0;
+        margin: 0;
+      }
+
+      .initiator-link:hover {
+        color: #004499;
+        background-color: rgba(0, 102, 204, 0.1);
+      }
+
+      .initiator-link:focus {
+        outline: 2px solid #0066cc;
+        outline-offset: 1px;
+      }
+
+      .initiator-link.current {
+        color: #28a745;
+        font-weight: 600;
+      }
+
+      .entrypoint-badge {
+        background: #e3f2fd;
+        color: #1565c0;
+        padding: 1px 4px;
+        border-radius: 2px;
+        font-size: 10px;
+        margin-left: 4px;
+      }
+    `,
+    css`
       .graph-section {
-        font-family: "Consolas", "Monaco", "Courier New", monospace;
+        font-family: system-ui, -apple-system, sans-serif;
       }
 
       .graph-title {
@@ -421,6 +487,8 @@ class ModuleGraph extends LitElement {
     this.filteredFiles = [];
 
     this.filters = {
+      tla: false,
+      sideEffects: false,
       entrypointOnly: false,
       barrelFiles: false,
       smallFiles: true,
@@ -441,6 +509,8 @@ class ModuleGraph extends LitElement {
     return (
       this.filters.entrypointOnly ||
       this.filters.barrelFiles ||
+      this.filters.tla ||
+      this.filters.sideEffects ||
       !this.filters.smallFiles ||
       !this.filters.mediumFiles ||
       !this.filters.largeFiles
@@ -449,15 +519,104 @@ class ModuleGraph extends LitElement {
 
   async connectedCallback() {
     super.connectedCallback();
-    const handler = () => {
-      console.log("Entrypoints changed:", files.getState());
+
+    const immediateHandler = () => {
+      const currentState = files.getState();
+      if (Object.keys(currentState).length === 0) {
+        this.graph = {};
+        this.files = {};
+        this.filteredFiles = [];
+        this.selectedFile = {};
+        this.requestUpdate();
+      }
+    };
+
+    const debouncedHandler = debounceAtTimeout(() => {
       this.graph = buildModuleGraphs(files.getState());
-      console.log("Module Graph:", this.graph);
-      printGraphs(this.graph);
       this.files = files.getState();
       this.updateFilteredFiles();
+    }, 150);
+
+    const handler = () => {
+      const currentState = files.getState();
+      if (Object.keys(currentState).length === 0) {
+        immediateHandler();
+      } else {
+        debouncedHandler();
+      }
     };
-    files.addEventListener("state-changed", debounceAtTimeout(handler, 150));
+
+    this._stateChangeHandler = handler;
+    files.addEventListener("state-changed", this._stateChangeHandler);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._stateChangeHandler) {
+      files.removeEventListener("state-changed", this._stateChangeHandler);
+    }
+  }
+
+  renderInitiatorView() {
+    if (this.selectedFile.entrypoint) {
+      return html``; // Don't show initiator view for entrypoints
+    }
+
+    const initiatorPaths = findInitiatorPath(
+      this.selectedFile.url,
+      this.graph,
+      this.files
+    );
+
+    if (initiatorPaths.length === 0) {
+      return html``;
+    }
+
+    return html`
+      <div class="bar">
+        <details>
+          <summary>Initiator Chain(s)</summary>
+          <div class="initiator-container">
+            ${initiatorPaths.map(
+              (path, pathIndex) => html`
+                <div class="initiator-path">
+                  ${path.length > 1
+                    ? html`
+                        <div class="initiator-path-title">
+                          From ${getFileName(path[0].url)}:
+                        </div>
+                      `
+                    : ""}
+                  ${path.map((item, index) => {
+                    const isLast = index === path.length - 1;
+
+                    return html`
+                      <div
+                        class="initiator-item"
+                        style="padding-left: ${index * 16}px;"
+                      >
+                        <button
+                          class="initiator-link ${isLast ? "current" : ""}"
+                          @click=${() => this.selectFile(item.fileObj)}
+                          title="${item.url}"
+                        >
+                          ${item.fileName}
+                        </button>
+                        ${item.isEntrypoint
+                          ? html`
+                              <span class="entrypoint-badge">entrypoint</span>
+                            `
+                          : ""}
+                      </div>
+                    `;
+                  })}
+                </div>
+              `
+            )}
+          </div>
+        </details>
+      </div>
+    `;
   }
 
   selectFile(file) {
@@ -495,7 +654,26 @@ class ModuleGraph extends LitElement {
   }
 
   updateFilteredFiles() {
-    let allFiles = Object.entries(this.files);
+    // Get all files from the module graphs instead of this.files
+    let allFiles = [];
+
+    // Iterate through each entrypoint's graph
+    Object.entries(this.graph).forEach(([entrypointUrl, moduleGraph]) => {
+      // Add all files from this module graph
+      Object.entries(moduleGraph).forEach(([url, fileData]) => {
+        allFiles.push([url, fileData]);
+      });
+    });
+
+    // Remove duplicates (files that appear in multiple graphs)
+    const uniqueFiles = new Map();
+    allFiles.forEach(([url, fileData]) => {
+      if (!uniqueFiles.has(url)) {
+        uniqueFiles.set(url, fileData);
+      }
+    });
+
+    allFiles = Array.from(uniqueFiles.entries());
 
     allFiles = allFiles.filter(([url, fileData]) => {
       if (this.filters.entrypointOnly && !fileData.entrypoint) {
@@ -503,6 +681,16 @@ class ModuleGraph extends LitElement {
       }
 
       if (this.filters.barrelFiles && !fileData.barrelFile) {
+        return false;
+      }
+
+      // Filter for top-level await
+      if (this.filters.tla && !fileData.tla) {
+        return false;
+      }
+
+      // Filter for side effects
+      if (this.filters.sideEffects && !fileData.sideEffects) {
         return false;
       }
 
@@ -546,7 +734,6 @@ class ModuleGraph extends LitElement {
   }
 
   foo(fileObj) {
-    console.log("File clicked:", fileObj);
     this.selectFile(fileObj);
     this.updateComplete.then(() => {
       this.scrollToSelectedFile();
@@ -589,17 +776,14 @@ class ModuleGraph extends LitElement {
   }
 
   render() {
+    // Count entrypoints from the graph
+    const totalEntrypoints = Object.keys(this.graph).length;
     const totalFiles = Object.entries(this.files).length;
     const filteredCount = this.filteredFiles.length;
     const hasSearchQuery = this.searchQuery.trim().length > 0;
 
-    const sortedFiles = this.filteredFiles.sort(
-      ([urlA, fileDataA], [urlB, fileDataB]) => {
-        if (fileDataA.entrypoint && !fileDataB.entrypoint) return -1;
-        if (fileDataB.entrypoint && !fileDataA.entrypoint) return 1;
-        return 0;
-      }
-    );
+    // Remove the sorting that groups entrypoints together
+    const sortedFiles = this.filteredFiles;
 
     return html`
       <div id="container">
@@ -659,7 +843,7 @@ class ModuleGraph extends LitElement {
                     @change=${(e) =>
                       this.onFilterChange("entrypointOnly", e.target.checked)}
                   />
-                  Entrypoint only
+                  Entrypoint
                 </label>
                 <label for="barrel-files">
                   <input
@@ -670,7 +854,29 @@ class ModuleGraph extends LitElement {
                     @change=${(e) =>
                       this.onFilterChange("barrelFiles", e.target.checked)}
                   />
-                  Barrel files
+                  Barrel file
+                </label>
+                <label for="tla">
+                  <input
+                    id="tla"
+                    name="tla"
+                    type="checkbox"
+                    .checked=${this.filters.tla}
+                    @change=${(e) =>
+                      this.onFilterChange("tla", e.target.checked)}
+                  />
+                  Top level await
+                </label>
+                <label for="side-effects-only">
+                  <input
+                    id="side-effects-only"
+                    name="side-effects-only"
+                    type="checkbox"
+                    .checked=${this.filters.sideEffects}
+                    @change=${(e) =>
+                      this.onFilterChange("sideEffects", e.target.checked)}
+                  />
+                  Side effects
                 </label>
                 <div class="filter-header">File sizes</div>
                 <label for="small-files">
@@ -716,7 +922,9 @@ class ModuleGraph extends LitElement {
                 }`
               : `${totalFiles} JavaScript file${
                   totalFiles !== 1 ? "s" : ""
-                } loaded`}
+                } loaded, ${totalEntrypoints} entrypoint${
+                  totalEntrypoints !== 1 ? "s" : ""
+                }`}
           </div>
 
           <ul id="files">
@@ -751,18 +959,35 @@ class ModuleGraph extends LitElement {
                   </div>
                   <div class="file-url">${unsafeHTML(highlightedUrl)}</div>
                   <div>
-                    <span class="file-details"
-                      >${getInitiatorInfo(fileData.initiator).details}</span
+                    <span class="file-details">
+                      ${fileData.entrypoint ? "Loaded from html" : ""}</span
                     >
                   </div>
 
                   <div class="file-initiator">
                     <span
-                      class="initiator-type ${getInitiatorInfo(
-                        fileData.initiator
-                      ).className}"
+                      class="initiator-type ${fileData.initiator.type ===
+                        "script-tag" ||
+                      fileData.initiator.type === "inline-script"
+                        ? "parser"
+                        : "script"}"
                     >
-                      ${getInitiatorInfo(fileData.initiator).type}
+                      ${when(
+                        fileData.initiator.type === "script-tag",
+                        () => html` Script tag `
+                      )}
+                      ${when(
+                        fileData.initiator.type === "inline-script",
+                        () => html` Inline script `
+                      )}
+                      ${when(
+                        fileData.initiator.type === "module",
+                        () => html`
+                          ${fileData.initiator.kind === "dynamic"
+                            ? "Dynamic import"
+                            : "Module"}
+                        `
+                      )}
                     </span>
 
                     ${fileData?.scriptAttributes?.async
@@ -774,6 +999,16 @@ class ModuleGraph extends LitElement {
                     ${fileData.barrelFile
                       ? html`<span class="initiator-type other"
                           >Barrel file</span
+                        >`
+                      : ""}
+                    ${fileData.sideEffects
+                      ? html`<span class="initiator-type other"
+                          >Side effects</span
+                        >`
+                      : ""}
+                    ${fileData.tla
+                      ? html`<span class="initiator-type other"
+                          >Top level await</span
                         >`
                       : ""}
                     ${fileData?.size
@@ -815,6 +1050,7 @@ class ModuleGraph extends LitElement {
                 <cm-editor .value=${this.selectedFile.content} id="content">
                   <cm-lang-javascript></cm-lang-javascript>
                 </cm-editor>
+                ${this.renderInitiatorView()}
                 <div class="bar" id="filename">
                   <details>
                     <summary>Imports</summary>
@@ -839,579 +1075,3 @@ class ModuleGraph extends LitElement {
 }
 
 customElements.define("module-graph", ModuleGraph);
-
-function buildTreeData(graphEntry, graphs, files) {
-  const trees = [];
-  const entrypoint = graphEntry;
-  const graph = graphs[entrypoint];
-  const treeData = {
-    entrypoint,
-    nodes: [],
-  };
-  function buildTree(
-    url,
-    indent = "",
-    visited = new Set(),
-    isLast = true,
-    isRoot = true
-  ) {
-    if (visited.has(url)) {
-      treeData.nodes.push({
-        url,
-        fileName: url,
-        fileObj: files[url] || {},
-        indent,
-        isCircular: true,
-      });
-      return;
-    }
-    visited.add(url);
-    treeData.nodes.push({
-      url,
-      fileName: url,
-      fileObj: files[url] || {},
-      indent,
-      isCircular: false,
-    });
-    const node = graph[url];
-    if (node && node.dependencies && node.dependencies.length > 0) {
-      for (let i = 0; i < node.dependencies.length; i++) {
-        const dep = node.dependencies[i];
-        const isLastDep = i === node.dependencies.length - 1;
-
-        let newIndent;
-        if (isRoot) {
-          newIndent = isLastDep ? "└── " : "├── ";
-        } else {
-          // Remove the tree characters from the current indent to get the base
-          const baseIndent = indent.substring(0, indent.length - 4);
-          // Add the continuation line
-          const continuation = isLast ? "    " : "│   ";
-          // Add the new tree character
-          const treeChar = isLastDep ? "└── " : "├── ";
-          newIndent = baseIndent + continuation + treeChar;
-        }
-
-        buildTree(dep.url, newIndent, new Set(visited), isLastDep, false);
-      }
-    }
-  }
-  buildTree(entrypoint);
-  trees.push(treeData);
-  return trees;
-}
-
-// Updated console version with correct tree lines
-function printGraphs(graphs) {
-  for (const [entrypoint, graph] of Object.entries(graphs)) {
-    console.log(`\n=== Module Graph for ${entrypoint} ===`);
-
-    function printTree(
-      url,
-      indent = "",
-      visited = new Set(),
-      isLast = true,
-      isRoot = true
-    ) {
-      if (visited.has(url)) {
-        console.log(indent + url + " (circular)");
-        return;
-      }
-
-      visited.add(url);
-      console.log(indent + url);
-
-      const node = graph[url];
-      if (node && node.dependencies && node.dependencies.length > 0) {
-        for (let i = 0; i < node.dependencies.length; i++) {
-          const dep = node.dependencies[i];
-          const isLastDep = i === node.dependencies.length - 1;
-
-          let newIndent;
-          if (isRoot) {
-            newIndent = isLastDep ? "└── " : "├── ";
-          } else {
-            const baseIndent = isLast ? "    " : "│   ";
-            newIndent = indent + baseIndent + (isLastDep ? "└── " : "├── ");
-          }
-
-          printTree(dep.url, newIndent, new Set(visited), isLastDep, false);
-        }
-      }
-    }
-
-    printTree(entrypoint);
-  }
-}
-
-
-const jsFiles = new Map();
-const redirectMap = new Map();
-
-const port = chrome.runtime.connect({ name: "devtools-panel" });
-
-port.postMessage({
-  type: "init",
-  tabId: chrome.devtools.inspectedWindow.tabId,
-});
-
-globalThis.files = files;
-
-port.onMessage.addListener((message) => {
-  if (message.type === "js-file") {
-    files.setState((old) => ({
-      ...old,
-      [message.data.url]: {
-        ...message.data,
-      },
-    }));
-  } else if (message.type === "file-content") {
-    // displayFileContent(message.data);
-  } else if (message.type === "error") {
-    // displayError(message.error);
-  }
-});
-function getAllScriptTags() {
-  const scriptGatheringCode = `
-    (function() {
-      function gatherScripts() {
-        const scripts = document.querySelectorAll('script');
-        const scriptData = [];
-        
-        scripts.forEach((script, index) => {
-          const data = {
-            index: index,
-            type: script.type || 'text/javascript',
-            isModule: script.type === 'module',
-            src: script.src || null,
-            hasInlineContent: !script.src && script.textContent.trim().length > 0,
-            inlineContent: !script.src ? script.textContent : null,
-            async: script.async,
-            defer: script.defer,
-            crossOrigin: script.crossOrigin,
-            integrity: script.integrity,
-            nonce: script.nonce,
-            referrerPolicy: script.referrerPolicy,
-            documentBaseURI: document.baseURI
-          };
-          scriptData.push(data);
-        });
-        
-        return scriptData;
-      }
-      
-      if (document.readyState === 'loading') {
-        return new Promise((resolve) => {
-          document.addEventListener('DOMContentLoaded', () => {
-            resolve(gatherScripts());
-          });
-        });
-      } else {
-        return gatherScripts();
-      }
-    })();
-  `;
-
-  // Execute in the inspected window context
-  chrome.devtools.inspectedWindow.eval(
-    scriptGatheringCode,
-    (result, isException) => {
-      if (isException) {
-        console.error("Error gathering scripts:", result);
-        return;
-      }
-
-
-      result.forEach((scriptInfo) => {
-        if (scriptInfo.src) {
-
-          const existingFile = files.getState()[scriptInfo.src];
-          if (existingFile) {
-            files.setState((old) => ({
-              ...old,
-              [scriptInfo.src]: {
-                ...existingFile,
-                entrypoint: true,
-                initiator: { type: "parser", scriptTag: true },
-                isModule: scriptInfo.isModule,
-                scriptAttributes: {
-                  async: scriptInfo.async,
-                  defer: scriptInfo.defer,
-                  type: scriptInfo.type,
-                },
-                imports: imports(existingFile.content, scriptInfo.src),
-                exports: exports(existingFile.content, scriptInfo.src),
-              },
-            }));
-          } else {
-            files.setState((old) => ({
-              ...old,
-              [scriptInfo.src]: {
-                entrypoint: true,
-                url: scriptInfo.src,
-                content: null,
-                initiator: { type: "parser", scriptTag: true },
-                isModule: scriptInfo.isModule,
-                isPending: true,
-                imports: [],
-                exports: [],
-                scriptAttributes: {
-                  async: scriptInfo.async,
-                  defer: scriptInfo.defer,
-                  type: scriptInfo.type,
-                },
-                timestamp: new Date().toISOString(),
-              },
-            }));
-          }
-        } else if (scriptInfo.hasInlineContent) {
-          const inlineUrl = new URL(
-            `inline-script-${scriptInfo.index}.js`,
-            scriptInfo.documentBaseURI
-          ).href;
-          files.setState((old) => ({
-            ...old,
-            [inlineUrl]: {
-              entrypoint: true,
-              url: inlineUrl,
-              content: scriptInfo.inlineContent,
-              initiator: { type: "parser", inline: true },
-              isModule: scriptInfo.isModule,
-              isInline: true,
-              imports: imports(scriptInfo.inlineContent, inlineUrl),
-              exports: exports(scriptInfo.inlineContent, inlineUrl),
-              scriptAttributes: {
-                type: scriptInfo.type,
-                nonce: scriptInfo.nonce,
-              },
-              timestamp: new Date().toISOString(),
-            },
-          }));
-        }
-      });
-    }
-  );
-}
-
-getAllScriptTags();
-
-chrome.devtools.network.onRequestFinished.addListener((request) => {
-  const url = request.request.url;
-  const contentType = request.response.headers.find(
-    (h) => h.name.toLowerCase() === "content-type"
-  );
-
-  if (request.response.status >= 300 && request.response.status < 400) {
-    const locationHeader = request.response.headers.find(
-      (h) => h.name.toLowerCase() === "location"
-    );
-    if (locationHeader && isJavaScriptFile(url, contentType?.value)) {
-      const redirectTo = new URL(locationHeader.value, url).href;
-      redirectMap.set(url, redirectTo);
-
-      const originalFile = jsFiles.get(url);
-      if (originalFile) {
-        originalFile.redirectTo = redirectTo;
-        originalFile.status = request.response.status;
-      }
-    }
-  }
-
-  if (isJavaScriptFile(url, contentType?.value)) {
-    let redirectedFrom = null;
-    for (const [from, to] of redirectMap.entries()) {
-      if (to === url) {
-        redirectedFrom = from;
-        break;
-      }
-    }
-
-
-    request.getContent((content, encoding) => {
-
-      const initiator = request.initiator ||
-        request._initiator || { type: "other" };
-
-
-      const existingFile = files.getState()[url];
-
-      const fileData = {
-        url: url,
-        content: content,
-        size: request.response?.content?.size ?? 0,
-        status: request.response.status,
-        timestamp: new Date().toISOString(),
-        initiator: existingFile?.initiator || initiator, 
-        redirectedFrom: redirectedFrom,
-        entrypoint: existingFile?.entrypoint || false,
-        isPending: false,
-        imports: imports(content, url),
-        exports: exports(content, url),
-        barrelFile: barrelFile(content, url, {
-          amountOfExportsToConsiderModuleAsBarrel: 5,
-        }),
-
-        ...(existingFile?.scriptAttributes && {
-          scriptAttributes: existingFile.scriptAttributes,
-        }),
-        ...(existingFile?.isModule !== undefined && {
-          isModule: existingFile.isModule,
-        }),
-        ...(existingFile?.isInline !== undefined && {
-          isInline: existingFile.isInline,
-        }),
-
-        _request: request,
-      };
-
-      if (redirectedFrom) {
-        const originalFile = jsFiles.get(redirectedFrom);
-        if (originalFile) {
-          originalFile.redirectTo = url;
-          originalFile.finalContent = content;
-        }
-      }
-
-      files.setState((old) => ({
-        ...old,
-        [url]: fileData,
-      }));
-    });
-  }
-});
-
-globalThis.jsFiles = jsFiles;
-
-function isJavaScriptFile(url, contentType) {
-  const jsExtensions = [
-    ".js", 
-    ".mjs", 
-    ".cjs", 
-    ".jsx", 
-    ".ts", 
-    ".tsx", 
-    ".vue", 
-    ".svelte", 
-  ];
-
-
-  const urlWithoutQuery = url.split("?")[0].toLowerCase();
-  if (jsExtensions.some((ext) => urlWithoutQuery.endsWith(ext))) {
-    return true;
-  }
-
-  if (
-    contentType &&
-    (contentType.includes("javascript") ||
-      contentType.includes("ecmascript") ||
-      contentType.includes("typescript") ||
-      contentType.includes("jsx") ||
-      contentType.includes("tsx"))
-  ) {
-    return true;
-  }
-
-  if (
-    !urlWithoutQuery.includes(".") &&
-    contentType &&
-    (contentType.includes("javascript") || contentType.includes("module"))
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-function getFileName(url) {
-  try {
-    const urlObj = new URL(url);
-    const pathname = urlObj.pathname;
-    const fileName = pathname.split("/").pop() || "index.js";
-    return fileName;
-  } catch (e) {
-    return url.split("/").pop() || "unknown.js";
-  }
-}
-
-function getInitiatorInfo(initiator) {
-  if (!initiator) {
-    return { type: "unknown", details: "", className: "other" };
-  }
-
-  if (initiator.type === "parser" && initiator.scriptTag) {
-    return {
-      type: "HTML",
-      details: "Loaded by HTML <script> tag",
-      className: "parser",
-    };
-  }
-
-  if (initiator.type === "parser" && initiator.inline) {
-    return {
-      type: "Inline",
-      details: "Inline script in HTML",
-      className: "parser",
-    };
-  }
-
-  switch (initiator.type) {
-    case "parser":
-      return {
-        type: "HTML",
-        details: "Loaded by HTML",
-        className: "parser",
-      };
-
-    case "script":
-      if (initiator.url) {
-        const initiatorFile = getFileName(initiator.url);
-        const line = initiator.lineNumber ? `:${initiator.lineNumber}` : "";
-        return {
-          type: "Script",
-          details: `Loaded by ${initiatorFile}${line}`,
-          className: "script",
-        };
-      }
-      return {
-        type: "Script",
-        details: "Dynamic import",
-        className: "script",
-      };
-
-    case "other":
-      return {
-        type: "Other",
-        details: "Browser or extension",
-        className: "other",
-      };
-
-    default:
-      return {
-        type: initiator.type,
-        details: "",
-        className: "other",
-      };
-  }
-}
-
-chrome.devtools.network.onNavigated.addListener(() => {
-  files.setState({});
-  redirectMap.clear();
-
-  chrome.devtools.inspectedWindow.eval(
-    `
-    (function() {
-      return new Promise((resolve) => {
-        if (document.readyState === 'complete') {
-          // Page already loaded, wait a bit more for dynamic scripts
-          setTimeout(resolve, 500);
-        } else {
-          // Wait for load event
-          window.addEventListener('load', () => {
-            setTimeout(resolve, 500);
-          }, { once: true });
-        }
-      });
-    })();
-    `,
-    (result, isException) => {
-      if (!isException) {
-        getAllScriptTags();
-      }
-    }
-  );
-});
-
-function buildModuleGraphs(modulesObj) {
-  const entrypoints = [];
-  for (const url in modulesObj) {
-    const module = modulesObj[url];
-    if (module && module.entrypoint) {
-      entrypoints.push(url);
-    }
-  }
-
-  const graphs = {};
-
-  for (const entrypoint of entrypoints) {
-    const graph = {};
-    const visited = new Set();
-
-    function traverse(moduleUrl) {
-      if (visited.has(moduleUrl)) return;
-      visited.add(moduleUrl);
-
-      const module = modulesObj[moduleUrl];
-      if (!module) return;
-
-      graph[moduleUrl] = {
-        ...module,
-        dependencies: [],
-      };
-
-      if (module.imports && module.imports.length > 0) {
-        const dependencyMap = {};
-
-        for (const imp of module.imports) {
-          const depUrl = imp.module;
-          if (!dependencyMap[depUrl]) {
-            dependencyMap[depUrl] = [];
-          }
-          dependencyMap[depUrl].push(imp);
-        }
-
-        for (const depUrl in dependencyMap) {
-          graph[moduleUrl].dependencies.push({
-            url: depUrl,
-            importInfo: dependencyMap[depUrl],
-          });
-
-          traverse(depUrl);
-        }
-      }
-    }
-
-    traverse(entrypoint);
-    graphs[entrypoint] = graph;
-  }
-
-  return graphs;
-}
-
-function getGraph(entrypoint) {
-  return graphs[entrypoint];
-}
-
-function getAllDependencies(graph, moduleUrl, visited = new Set()) {
-  if (visited.has(moduleUrl)) return [];
-  visited.add(moduleUrl);
-
-  const module = graph[moduleUrl];
-  if (!module || !module.dependencies) return [];
-
-  const deps = [];
-  for (const dep of module.dependencies) {
-    deps.push(dep.url);
-    deps.push(...getAllDependencies(graph, dep.url, visited));
-  }
-
-  return [...new Set(deps)];
-}
-
-function findImporters(modulesMap, targetUrl) {
-  const importers = [];
-  for (const [url, module] of modulesMap) {
-    if (module.imports) {
-      const importInfos = module.imports.filter(
-        (imp) => imp.module === targetUrl
-      );
-      if (importInfos.length > 0) {
-        importers.push({
-          url,
-          importInfo: importInfos,
-        });
-      }
-    }
-  }
-  return importers;
-}
