@@ -130,7 +130,6 @@ export function buildTreeData(graphEntry, graphs, files) {
   trees.push(treeData);
   return trees;
 }
-
 export function buildModuleGraphs(modulesObj) {
   const entrypoints = [];
   for (const url in modulesObj) {
@@ -181,6 +180,43 @@ export function buildModuleGraphs(modulesObj) {
             initiator: mod.initiator,
           });
           traverse(url);
+        }
+      }
+
+      // Handle imports from inline scripts by resolving import paths
+      if (module.imports && module.imports.length > 0) {
+        for (const imp of module.imports) {
+          // Resolve the import path relative to the module URL
+          try {
+            const resolvedUrl = new URL(imp.module, moduleUrl).href;
+            
+            // Check if this resolved URL exists in our modules
+            if (modulesObj[resolvedUrl] && !graph[moduleUrl].dependencies.some(dep => dep.url === resolvedUrl)) {
+              graph[moduleUrl].dependencies.push({
+                url: resolvedUrl,
+                importType: imp.kind || 'static',
+                isInlineScriptImport: module.isInline || false
+              });
+              traverse(resolvedUrl);
+            }
+          } catch (e) {
+            // If URL resolution fails, it might be a bare module specifier
+            // In a real implementation, you might want to handle this differently
+            console.warn(`Failed to resolve import ${imp.module} from ${moduleUrl}`, e);
+          }
+        }
+      }
+
+      // Also traverse importsFiles if they exist
+      if (module.importsFiles && module.importsFiles.length > 0) {
+        for (const importedUrl of module.importsFiles) {
+          if (!graph[moduleUrl].dependencies.some(dep => dep.url === importedUrl)) {
+            graph[moduleUrl].dependencies.push({
+              url: importedUrl,
+              fromImportsFiles: true
+            });
+            traverse(importedUrl);
+          }
         }
       }
     }

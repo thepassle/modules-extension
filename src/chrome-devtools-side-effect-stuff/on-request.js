@@ -111,7 +111,6 @@ chrome.devtools.network.onRequestFinished.addListener((request) => {
         // Initialize or preserve import/export tracking arrays
         importedBy: existingGlobalFile?.importedBy || [],
         importsFiles: existingGlobalFile?.importsFiles || [],
-        request,
       };
 
       if (redirectedFrom) {
@@ -142,28 +141,25 @@ chrome.devtools.network.onRequestFinished.addListener((request) => {
 
       allFiles[url] = fileData;
 
-      // Also add imports from parsed content to build the import graph
-      // if (content && fileData.imports) {
-      // fileData.imports.forEach((importUrl) => {
-      //   // Add to importsFiles if not already present
-      //   if (!fileData.importsFiles.includes(importUrl)) {
-      //     fileData.importsFiles.push(importUrl);
-      //   }
-
-      //   // Update the imported file's importedBy array
-      //   if (!allFiles[importUrl]) {
-      //     allFiles[importUrl] = {
-      //       url: importUrl,
-      //       importsFiles: [],
-      //       importedBy: [],
-      //     };
-      //   }
-
-      //   if (!allFiles[importUrl].importedBy.includes(url)) {
-      //     allFiles[importUrl].importedBy.push(url);
-      //   }
-      // });
-      // }
+      // Check if this file is imported by any inline scripts
+      // by examining all inline script imports
+      for (const [inlineUrl, inlineFile] of Object.entries(allFiles)) {
+        if (inlineFile.isInline && inlineFile.imports) {
+          // Check if any import from the inline script matches this file
+          for (const imp of inlineFile.imports) {
+            const resolvedImportUrl = new URL(imp.module, inlineUrl).href;
+            if (resolvedImportUrl === url) {
+              // This file is imported by the inline script
+              if (!fileData.importedBy.includes(inlineUrl)) {
+                fileData.importedBy.push(inlineUrl);
+              }
+              if (!allFiles[inlineUrl].importsFiles.includes(url)) {
+                allFiles[inlineUrl].importsFiles.push(url);
+              }
+            }
+          }
+        }
+      }
 
       // Update local state
       files.setState((old) => ({
