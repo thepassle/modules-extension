@@ -1,10 +1,14 @@
 import { barrelFile } from "@thepassle/module-utils/barrel-file.js";
 import { imports } from "@thepassle/module-utils/imports.js";
-import { exports } from "@thepassle/module-utils/exports.js";
+import { exports as _exports } from "@thepassle/module-utils/exports.js";
 import { sideEffects } from "@thepassle/module-utils/side-effects.js";
 import { topLevelAwait } from "@thepassle/module-utils/top-level-await.js";
 
 import { isJavaScriptFile } from "../utils.js";
+
+/**
+ * @import { File } from "../../types.js";
+ */
 
 chrome.devtools.network.onRequestFinished.addListener((request) => {
   const url = request.request.url;
@@ -57,9 +61,12 @@ chrome.devtools.network.onRequestFinished.addListener((request) => {
           existingFile?.initiator?.type === "script-tag"
         )
       ) {
+        // @ts-ignore
         const isDynamicallyImported = !request?._initiator?.url;
         initiatorUrl = isDynamicallyImported
+          // @ts-ignore
           ? request?._initiator?.stack?.callFrames?.[0]?.url
+          // @ts-ignore
           : request?._initiator?.url;
         processedInitiator = {
           kind: isDynamicallyImported ? "dynamic" : "static",
@@ -82,10 +89,11 @@ chrome.devtools.network.onRequestFinished.addListener((request) => {
         finalInitiator.url = processedInitiator.url;
       }
 
+      /** @type {File} */
       const fileData = {
         url: url,
         content: content || existingFile?.content,
-        size: request.response?.content?.size ?? 0,
+        size: String(request.response?.content?.size ?? 0),
         status: request.response.status,
         timestamp: new Date().toISOString(),
         initiator: finalInitiator,
@@ -95,7 +103,7 @@ chrome.devtools.network.onRequestFinished.addListener((request) => {
         sideEffects: sideEffects(content || "", url),
         tla: topLevelAwait(content || "", url),
         imports: imports(content || "", url),
-        exports: exports(content || "", url),
+        exports: _exports(content || "", url),
         barrelFile: barrelFile(content || "", url, {
           amountOfExportsToConsiderModuleAsBarrel: 5,
         }),

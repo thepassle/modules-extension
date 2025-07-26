@@ -8,18 +8,22 @@
     "start": "chokidar \"*.js\" \"src/**/*.js\" -c \"npm run build;npm run reload\"\n\n",
     "reload": "open http://reload.extensions/",
     "build": "esbuild panel.js --outfile=dist/panel-bundle.js --bundle --format=esm",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint:types": "tsc",
+    "lint:types:watch": "tsc --watch"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@types/chrome": "^0.1.1",
     "@web/dev-server": "^0.4.6",
     "chokidar-cli": "^3.0.0",
     "esbuild": "^0.25.6",
     "msw": "^2.10.4",
-    "picomatch": "^4.0.2"
+    "picomatch": "^4.0.2",
+    "typescript": "^5.8.3"
   },
   "dependencies": {
     "@thepassle/app-tools": "^0.10.0",

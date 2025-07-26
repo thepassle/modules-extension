@@ -10,6 +10,17 @@ export function getFileSizeClass(sizeKB) {
   }
 }
 
+/**
+ * @param {string} fileContent 
+ * @returns 
+ */
+export function calculateFileSizeInKB(fileContent) {
+  const sizeInBytes = new TextEncoder().encode(fileContent).length;
+  const sizeInKB = sizeInBytes / 1024;
+
+  return sizeInKB > 0 ? Math.max(sizeInKB, 0.01).toFixed(2) : "0.00";
+}
+
 export function getFileName(url) {
   try {
     const urlObj = new URL(url);

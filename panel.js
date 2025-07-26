@@ -649,7 +649,7 @@ class ModuleGraph extends LitElement {
     this.updateFilteredFiles();
     const searchInput = this.shadowRoot.querySelector("#search-input");
     if (searchInput) {
-      searchInput.focus();
+      /** @type {HTMLInputElement} */ (searchInput).focus();
     }
   }
 
@@ -943,7 +943,7 @@ class ModuleGraph extends LitElement {
                 ? this.highlightText(url, this.searchQuery)
                 : url;
 
-              const kb = (fileData.size / 1024).toFixed(2);
+              const kb = Math.max(Number((fileData.size / 1024).toFixed(2)), 0.01);
               return html`
                 <li
                   @click=${() => this.selectFile(fileData)}

@@ -1,8 +1,10 @@
 import { imports } from "@thepassle/module-utils/imports.js";
-import { exports } from "@thepassle/module-utils/exports.js";
+import { exports as _exports } from "@thepassle/module-utils/exports.js";
 import { sideEffects } from "@thepassle/module-utils/side-effects.js";
 import { topLevelAwait } from "@thepassle/module-utils/top-level-await.js";
 import { files } from "../singletons.js";
+import { calculateFileSizeInKB } from "../utils.js";
+import { barrelFile } from "@thepassle/module-utils/barrel-file.js";
 
 function getAllScriptTags() {
   const scriptGatheringCode = `
@@ -69,7 +71,7 @@ function getAllScriptTags() {
                 sideEffects: sideEffects(existingFile.content, scriptInfo.src),
                 tla: topLevelAwait(existingFile.content, scriptInfo.src),
                 imports: imports(existingFile.content, scriptInfo.src),
-                exports: exports(existingFile.content, scriptInfo.src),
+                exports: _exports(existingFile.content, scriptInfo.src),
               },
             }));
           } else {
@@ -87,6 +89,7 @@ function getAllScriptTags() {
                   async: scriptInfo.async,
                   defer: scriptInfo.defer,
                   type: scriptInfo.type,
+                  nonce: scriptInfo.nonce,
                 },
                 timestamp: new Date().toISOString(),
               },
@@ -97,24 +100,32 @@ function getAllScriptTags() {
             `inline-script-${scriptInfo.index}.js`,
             scriptInfo.documentBaseURI
           ).href;
+
           files.setState((old) => ({
             ...old,
             [inlineUrl]: {
-              entrypoint: true,
               url: inlineUrl,
               content: scriptInfo.inlineContent,
+              timestamp: new Date().toISOString(),
               initiator: { type: "inline-script" },
-              isModule: scriptInfo.isModule,
-              isInline: true,
+              entrypoint: true,
               sideEffects: sideEffects(scriptInfo.inlineContent, inlineUrl),
               tla: topLevelAwait(scriptInfo.inlineContent, inlineUrl),
+              size: calculateFileSizeInKB(scriptInfo.inlineContent),
               imports: imports(scriptInfo.inlineContent, inlineUrl),
-              exports: exports(scriptInfo.inlineContent, inlineUrl),
+              exports: _exports(scriptInfo.inlineContent, inlineUrl),
+              barrelFile: barrelFile(scriptInfo.inlineContent, inlineUrl, {
+                amountOfExportsToConsiderModuleAsBarrel: 5,
+              }),
+              isModule: scriptInfo.isModule,
+              importsFiles: [],
+              isInline: true,
               scriptAttributes: {
+                async: scriptInfo.async,
+                defer: scriptInfo.defer,
                 type: scriptInfo.type,
                 nonce: scriptInfo.nonce,
               },
-              timestamp: new Date().toISOString(),
             },
           }));
         }
