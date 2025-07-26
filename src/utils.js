@@ -1,18 +1,21 @@
+/**
+ * @param {number | string} sizeKB 
+ * @returns {"small" | "medium" | "large"}
+ */
 export function getFileSizeClass(sizeKB) {
-  const size = parseFloat(sizeKB);
-
+  const size = parseFloat(String(sizeKB));
   if (size < 10) {
-    return "file-size small";
+    return "small";
   } else if (size <= 40) {
-    return "file-size medium";
+    return "medium";
   } else {
-    return "file-size large";
+    return "large";
   }
 }
 
 /**
  * @param {string} fileContent 
- * @returns 
+ * @returns {string}
  */
 export function calculateFileSizeInKB(fileContent) {
   const sizeInBytes = new TextEncoder().encode(fileContent).length;
@@ -21,6 +24,11 @@ export function calculateFileSizeInKB(fileContent) {
   return sizeInKB > 0 ? Math.max(sizeInKB, 0.01).toFixed(2) : "0.00";
 }
 
+/**
+ * 
+ * @param {string} url 
+ * @returns {string}
+ */
 export function getFileName(url) {
   try {
     const urlObj = new URL(url);
@@ -32,6 +40,12 @@ export function getFileName(url) {
   }
 }
 
+/**
+ * 
+ * @param {string} url 
+ * @param {string} contentType 
+ * @returns {boolean}
+ */
 export function isJavaScriptFile(url, contentType) {
   const jsExtensions = [
     ".js",

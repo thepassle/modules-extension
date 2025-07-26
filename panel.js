@@ -697,13 +697,13 @@ class ModuleGraph extends LitElement {
       const kb = fileData.size ? (fileData.size / 1024).toFixed(2) : 0;
       const sizeClass = getFileSizeClass(kb);
 
-      if (sizeClass === "file-size small" && !this.filters.smallFiles) {
+      if (sizeClass === "small" && !this.filters.smallFiles) {
         return false;
       }
-      if (sizeClass === "file-size medium" && !this.filters.mediumFiles) {
+      if (sizeClass === "medium" && !this.filters.mediumFiles) {
         return false;
       }
-      if (sizeClass === "file-size large" && !this.filters.largeFiles) {
+      if (sizeClass === "large" && !this.filters.largeFiles) {
         return false;
       }
 
@@ -1013,7 +1013,7 @@ class ModuleGraph extends LitElement {
                       : ""}
                     ${fileData?.size
                       ? html`
-                          <span class="initiator-type ${getFileSizeClass(kb)}"
+                          <span class="initiator-type file-size ${getFileSizeClass(kb)}"
                             >${kb} kb</span
                           >
                         `
